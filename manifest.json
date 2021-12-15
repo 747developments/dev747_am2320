@@ -1,0 +1,10 @@
+{
+  "domain": "dev747_AM2320",
+  "name": "DEV 747 AM2320",
+  "codeowners": ["Radek Reznicek - 747Developments"],
+  "dependencies": [],
+  "documentation": "Doc",
+  "requirements": [],
+  "iot_class": "local_polling",
+  "version": "1.0.0"
+}
