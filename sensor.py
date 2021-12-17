@@ -1,10 +1,7 @@
 from __future__ import annotations
-
-__version__ = '1.0.0'
-
+"""Driver for Home Assistant to handle AM2320 sensor."""
 import logging
 import os
-# import fcntl
 import time
 import voluptuous as vol
 import smbus
@@ -26,22 +23,16 @@ from homeassistant.const import (
     CONF_MONITORED_CONDITIONS
 )
 
-# Attributes
-I2C_SLAVE_ADDR          = 0x0703
-
-DOMAIN                  = "dev_747_am2320"
-DEFAULT_NAME            = "I2C Sensor"
-SENSOR_TEMP             = "temperature"
-SENSOR_HUMID            = "humidity"
-
-_SENSOR_TYPES = {
-    "temperature":  ("Temperature",     "",     "mdi:thermometer",      "°C"),
-    "humidity":     ("Humidity",        "",     "mdi:water-percent",    "%"),
-}
-
-DEFAULT_I2C_ADDRESS     = "0x5C"
-DEFAULT_I2C_BUS         = 1
-CRC_VAL                 = 0xFFFF
+from .const import (
+    DEFAULT_NAME,
+    SENSOR_TEMP,
+    SENSOR_HUMID,
+    DEFAULT_I2C_ADDRESS,
+    DEFAULT_I2C_BUS,
+    CRC_VAL,
+    DEFAULT_EMPTY_RAW_DATA,
+    _SENSOR_TYPES
+)
 
 CONF_I2C_ADDRESS        = "i2c_address"
 CONF_I2C_BUS_NUM        = "i2c_bus_num"
@@ -66,9 +57,9 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     i2c_address = config.get(CONF_I2C_ADDRESS)
     i2c_bus_num = config.get(CONF_I2C_BUS_NUM)
     name = config.get(CONF_NAME)
-    #_LOGGER.warning(config[CONF_MONITORED_CONDITIONS])
     for monitored_condition in config[CONF_MONITORED_CONDITIONS]:
         async_add_entities([AM2320(name, i2c_address, i2c_bus_num, monitored_condition)])
+        time.sleep(0.001)
 
 class AM2320(SensorEntity):
     """ AM2320."""
@@ -79,35 +70,51 @@ class AM2320(SensorEntity):
         self._monitored_condition = monitored_condition
         self._name = name
         self._state = None
-        self.raw_data = None
+        self.raw_data = DEFAULT_EMPTY_RAW_DATA
+        self.non_receive_counter = 0
  
         self._i2c_bus_num = i2c_bus_num
         self._i2c_address = i2c_address        
         self._i2c_bus = smbus.SMBus(self._i2c_bus_num)  
         
-        # self.fd = os.open("/dev/i2c-%d" % (self._i2c_bus_num), os.O_RDWR)
-        # fcntl.ioctl(self.fd, I2C_SLAVE_ADDR, self._i2c_address)
-        
         return
-    
+        
+    def combine_bytes(self, msb, lsb):
+        """Combine bytes."""
+        return ((msb << 8) | lsb)
+        
+    def calc_crc16(self, data):
+        """Calculate CRC."""
+        crc = CRC_VAL
+        for x in data:
+            crc ^= x
+            for i in range(8):
+                if crc & 1:
+                    crc >>= 1
+                    crc ^= 0xA001
+                else:
+                    crc >>= 1
+        return crc
+        
     def wake_up_sensor(self):
+        """Wake up sensor."""
         try:
             self._i2c_bus.write_byte(self._i2c_address, 0x00)
-            time.sleep(0.001)
+            time.sleep(0.01)
         except:
             pass
         return
     
-    def read_measurements_raw_data(self): 
+    def read_measurements_raw_data(self):
+        """Read data from I2C bus."""
         self._i2c_bus.write_i2c_block_data(self._i2c_address, 0x03, [0x00, 0x04]) 
-        #os.write(self.fd, b'\x03\x00\x04')
-        time.sleep(0.002)
+        time.sleep(0.1)
         self.raw_data = self._i2c_bus.read_i2c_block_data(self._i2c_address, 0, 8)
-        #self.raw_data = bytearray(os.read(self.fd, 8))
         return
         
-    def compute_temperature(self):  
-        temperature = self._combine_bytes(self.raw_data[4], self.raw_data[5])
+    def compute_temperature(self): 
+        """Get temperature."""
+        temperature = self.combine_bytes(self.raw_data[4], self.raw_data[5])
         if temperature & 0x8000:
             temperature = -(temperature & 0x7FFF)
         temperature /= 10.0
@@ -115,50 +122,41 @@ class AM2320(SensorEntity):
         return temperature
         
     def compute_humidity(self):
-        humidity = self._combine_bytes(self.raw_data[2], self.raw_data[3]) / 10.0
+        """Get humidity."""
+        humidity = self.combine_bytes(self.raw_data[2], self.raw_data[3]) / 10.0
         return humidity
-    
-    @staticmethod
-    def _calc_crc16(data):
-        crc = CRC_VAL
-        for x in data:
-            crc = crc ^ x
-            for bit in range(0, 8):
-                if (crc & 0x0001) == 0x0001:
-                    crc >>= 1
-                    crc ^= 0xA001
-                else:
-                    crc >>= 1
-        return crc
-
-    @staticmethod
-    def _combine_bytes(msb, lsb):
-        return msb << 8 | lsb
-         
+            
     def get_data(self):
-        #Reset the CRC variable
+        """Get data from sensor."""
         self.CRC = CRC_VAL
-        
+        self.raw_data = DEFAULT_EMPTY_RAW_DATA
         self.wake_up_sensor()
         
         try:
             self.read_measurements_raw_data()
             
             if ((self.raw_data[0] != 0x03) or (self.raw_data[1] != 0x04)):
-                raise Exception("AM2320 - First two read bytes mismatched")
+                _LOGGER.error("First 2 bytes received mismatch A2320 %d - %s-%s" % (self.non_receive_counter, self._name, self._monitored_condition))
             
-            # CRC check
-            if self._calc_crc16(self.raw_data[0:6]) != self._combine_bytes(self.raw_data[7], self.raw_data[6]):
-                raise Exception("AM2320 - CRC failed")
-                        
-            #_LOGGER.warning(self._monitored_condition == SENSOR_TEMP)
-            if self._monitored_condition == SENSOR_TEMP:                
-                self._state = self.compute_temperature()                
-            else:                
-                self._state = self.compute_humidity()
-                    
+            else:
+                crc = self.calc_crc16(self.raw_data[:6]) 
+                if crc == self.combine_bytes(self.raw_data[-1], self.raw_data[-2]):
+                    if self._monitored_condition == SENSOR_TEMP:                
+                        self._state = self.compute_temperature()                
+                    else:                
+                        self._state = self.compute_humidity()                
+                else:
+                    _LOGGER.error("CRC failed A2320 %d - %s-%s" % (self.non_receive_counter, self._name, self._monitored_condition))
+                
+            self.non_receive_counter = 0
+            
         except Exception as ex:
-            _LOGGER.error("Error retrieving A2320 data: %s" % (ex))
+            self.non_receive_counter += 1
+            if(self.non_receive_counter >= 10):
+                _LOGGER.error("Error retrieving A2320 data %d - %s-%s: %s" % (self.non_receive_counter, self._name, self._monitored_condition, ex))
+                self.non_receive_counter = 0
+                self._state = None
+            time.sleep(0.1)
        
     @property
     def name(self):
