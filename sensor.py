@@ -49,7 +49,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
         ),
 })
 
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
+def setup_platform(hass, config, add_entities, discovery_info=None):
     """Set up the sensor platform."""
 
     # if discovery_info is None:
@@ -58,8 +58,8 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     i2c_bus_num = config.get(CONF_I2C_BUS_NUM)
     name = config.get(CONF_NAME)
     for monitored_condition in config[CONF_MONITORED_CONDITIONS]:
-        async_add_entities([AM2320(name, i2c_address, i2c_bus_num, monitored_condition)])
-        time.sleep(0.001)
+        add_entities([AM2320(name, i2c_address, i2c_bus_num, monitored_condition)])
+        time.sleep(0.01)
 
 class AM2320(SensorEntity):
     """ AM2320."""
@@ -100,7 +100,7 @@ class AM2320(SensorEntity):
         """Wake up sensor."""
         try:
             self._i2c_bus.write_byte(self._i2c_address, 0x00)
-            time.sleep(0.01)
+            time.sleep(0.001) #Wait at least 0.8ms, at most 3ms
         except:
             pass
         return
@@ -108,7 +108,7 @@ class AM2320(SensorEntity):
     def read_measurements_raw_data(self):
         """Read data from I2C bus."""
         self._i2c_bus.write_i2c_block_data(self._i2c_address, 0x03, [0x00, 0x04]) 
-        time.sleep(0.1)
+        time.sleep(0.005) #Wait at least 1.5ms for result
         self.raw_data = self._i2c_bus.read_i2c_block_data(self._i2c_address, 0, 8)
         return
         
@@ -173,7 +173,7 @@ class AM2320(SensorEntity):
         """Return the icon to use in the frontend."""
         return _SENSOR_TYPES[self._monitored_condition][2]
 
-    async def async_update(self):
+    def update(self):
         self.get_data()
 
     @property
